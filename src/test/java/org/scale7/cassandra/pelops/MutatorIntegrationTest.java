@@ -7,6 +7,7 @@ import org.apache.cassandra.thrift.Mutation;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.mockito.Mockito;
+import org.scale7.cassandra.pelops.exceptions.ModelException;
 import org.scale7.cassandra.pelops.exceptions.ProtocolException;
 import org.scale7.cassandra.pelops.pool.DebuggingPool;
 import org.scale7.cassandra.pelops.pool.IThriftPool;
@@ -25,7 +26,7 @@ public class MutatorIntegrationTest extends AbstractIntegrationTest {
 
 	public static final String CF = "MUT_CF";
     public static final String SCF = "MUT_SCF";
-    
+
 	@BeforeClass
 	public static void setup() throws Exception {
 		setup(Arrays.asList(
@@ -36,8 +37,8 @@ public class MutatorIntegrationTest extends AbstractIntegrationTest {
                 .setColumn_type(CFDEF_TYPE_SUPER)
                 .setComparator_type(CFDEF_COMPARATOR_BYTES)
                 .setSubcomparator_type(CFDEF_COMPARATOR_BYTES)));
-	}    
-	
+	}
+
     @Test
     public void testConstructorDeleteIfNullState() {
         IThriftPool pool = Mockito.mock(IThriftPool.class);
@@ -130,7 +131,7 @@ public class MutatorIntegrationTest extends AbstractIntegrationTest {
         }
 
         assertTrue("There should be one deletion", isOneDeletion);
-        
+
         pool.shutdown();
     }
 
@@ -184,13 +185,10 @@ public class MutatorIntegrationTest extends AbstractIntegrationTest {
         List<Column> columns = mutator.newColumnList(
                 mutator.newColumn(Bytes.fromInt(1), (Bytes) null)
         );
-        mutator.writeColumns(CF, rowKey, columns);
-
         try {
-            mutator.execute(ConsistencyLevel.ONE);
+            mutator.writeColumns(CF, rowKey, columns);
             fail("Should not reach here...");
-        } catch (ProtocolException e) {
-            assertTrue("Wrong exception thrown", e.getMessage().contains("Required field 'value' was not present!"));
+        } catch (ModelException e) {
         }
     }
 
@@ -248,14 +246,46 @@ public class MutatorIntegrationTest extends AbstractIntegrationTest {
                 mutator.newColumn(Bytes.fromInt(1), (Bytes) null)
         );
 
-        mutator.writeSubColumns(SCF, rowKey, columnName, columns);
+        try {
+            mutator.writeSubColumns(SCF, rowKey, columnName, columns);
+            fail("Should not reach here...");
+        } catch (ModelException e) {
+        }
+    }
+
+    @Test
+    public void testTProtocolExceptionDoesNotBreakPooledConnection() throws Exception {
+        Bytes rowKey = Bytes.fromLong(Long.MAX_VALUE);
+
+        Mutator mutator = createMutator();
+
+        assertFalse("Mutator is not in a valid state for this test", mutator.deleteIfNull);
 
         try {
+            mutator.writeColumn(CF, rowKey, mutator.newColumn(Bytes.fromInt(1), (Bytes) null));
             mutator.execute(ConsistencyLevel.ONE);
-            fail("Should not reach here...");
-        } catch (ProtocolException e) {
-            assertTrue("Wrong exception thrown", e.getMessage().contains("Required field 'value' was not present!"));
+        } catch (Exception e) {
+            // do nothing
         }
+
+        createSelector().getColumnsFromRow(CF, rowKey, false, ConsistencyLevel.ONE);
+    }
+
+    @Test
+    public void testNotFoundExceptionDoesNotBreakPooledConnection() throws Exception {
+        Bytes rowKey = Bytes.fromLong(Long.MAX_VALUE);
+
+        Mutator mutator = createMutator();
+
+        assertFalse("Mutator is not in a valid state for this test", mutator.deleteIfNull);
+
+        try {
+            createSelector().getColumnsFromRow(CF, rowKey, false, ConsistencyLevel.ONE);
+        } catch (Exception e) {
+            // do nothing
+        }
+
+        createSelector().getColumnsFromRow(CF, rowKey, false, ConsistencyLevel.ONE);
     }
 
     private void verifyColumns(List<Column> expectedColumns, List<Column> actualColumns) {
